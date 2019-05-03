@@ -1,0 +1,12 @@
+[submodule "third-party/tinyply"]
+	path = third-party/tinyply
+	url = https://github.com/ddiakopoulos/tinyply.git
+	branch = master
+[submodule "third-party/glad"]
+	path = third-party/glad
+	url = https://github.com/Dav1dde/glad.git
+	branch = master
+[submodule "third-party/glfw"]
+	path = third-party/glfw
+	url = https://github.com/glfw/glfw.git
+	branch = master
