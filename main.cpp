@@ -3,8 +3,41 @@
 #include <filesystem>
 #include <vector>
 #include "third-party/tinyply/source/tinyply.h"
+#include "build/third-party/glad/include/glad/glad.h"
+#include "third-party/glfw/include/GLFW/glfw3.h"
 
+int windowHeight = 1024;
+int windowWidth = 1024;
 int pointStride = 6;
+
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+  if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+    glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
+
+void error_callback(int code, const char* description)
+{
+  std::cerr << "GLFW CODE: " << code << std::endl;
+  std::cerr << description << std::endl;
+}
+
+GLFWwindow* setupWindow()
+{
+  glfwSetErrorCallback(error_callback);
+  if (!glfwInit())
+  {
+    return nullptr;
+  }
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 4);
+  GLFWwindow* window = glfwCreateWindow(windowWidth, windowHeight, "Rosenthal-Linsen-Lars-2008", NULL, NULL);
+  glfwSetKeyCallback(window, key_callback);
+  glfwMakeContextCurrent(window);
+  gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+  glfwSwapInterval(1);
+  return window;
+}
 
 std::vector<float> readPLY(std::filesystem::path const& PLYpath)
 {
@@ -67,5 +100,18 @@ int main(int argc, char *argv[])
     std::cerr << e.what() << std::endl;
     return 4;
   }
+  GLFWwindow* window = setupWindow();
+  if (!window)
+  {
+    std::cout << "FAILED TO CREATE GLFW WINDOW " << std::endl;
+    glfwTerminate();
+    return 5;
+  }
+  while (!glfwWindowShouldClose(window))
+  {
+    glfwPollEvents();
+  }
+  glfwDestroyWindow(window);
+  glfwTerminate();
   return 0;
 }
