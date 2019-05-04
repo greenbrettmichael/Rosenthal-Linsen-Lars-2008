@@ -9,8 +9,8 @@
 #include "third-party/glm/glm/gtc/matrix_transform.hpp"
 
 bool firstMouse = true;
-int windowHeight = 1024;
-int windowWidth = 1024;
+int windowHeight = 800;
+int windowWidth = 640;
 float fov = 45.f;
 float pitch = 0.f;
 float yaw = 0.f;
