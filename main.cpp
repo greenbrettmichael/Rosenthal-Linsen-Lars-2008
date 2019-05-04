@@ -408,13 +408,93 @@ void main()
 out vec4 FragColor;
 in vec2 TexCoords;
 
-//uniform sampler2D positionTexture;
 uniform sampler2D colorDepthTexture;
+const float offset = 1.0 / 300.0;  
 
 void main()
 {
-  vec3 col = texture(colorDepthTexture, TexCoords).rgb;
-  FragColor = vec4(col, 1.0);
+vec2 offsets[9] = vec2[](
+        vec2(-offset,  offset), // top-left
+        vec2( 0.0f,    offset), // top-center
+        vec2( offset,  offset), // top-right
+        vec2(-offset,  0.0f),   // center-left
+        vec2( 0.0f,    0.0f),   // center-center
+        vec2( offset,  0.0f),   // center-right
+        vec2(-offset, -offset), // bottom-left
+        vec2( 0.0f,   -offset), // bottom-center
+        vec2( offset, -offset)  // bottom-right    
+    );
+float sampleTex[9];
+    for(int i = 0; i < 9; i++)
+        sampleTex[i] = texture(colorDepthTexture, TexCoords.st + offsets[i]).a;
+
+float kernel1[9] = float[](
+        0, 1, 1,
+        0, 1, 1,
+        0, 1, 1
+    );
+  float sum1 = 0;
+for(int i = 0; i < 9; i++)
+        sum1 += sampleTex[i] * kernel1[i];
+float kernel2[9] = float[](
+        1, 1, 1,
+        1, 1, 1,
+        0, 0, 0
+    );
+  float sum2 = 0;
+for(int i = 0; i < 9; i++)
+        sum2 += sampleTex[i] * kernel2[i];
+float kernel3[9] = float[](
+        1, 1, 0,
+        1, 1, 0,
+        1, 1, 0
+    );
+  float sum3 = 0;
+for(int i = 0; i < 9; i++)
+        sum3 += sampleTex[i] * kernel3[i];
+float kernel4[9] = float[](
+        0, 0, 0,
+        1, 1, 1,
+        1, 1, 1
+    );
+  float sum4 = 0;
+for(int i = 0; i < 9; i++)
+        sum4 += sampleTex[i] * kernel4[i];
+float kernel5[9] = float[](
+        1, 1, 1,
+        0, 1, 1,
+        0, 0, 1
+    );
+  float sum5 = 0;
+for(int i = 0; i < 9; i++)
+        sum5 += sampleTex[i] * kernel5[i];
+float kernel6[9] = float[](
+        1, 1, 1,
+        1, 1, 0,
+        1, 0, 0
+    );
+  float sum6 = 0;
+for(int i = 0; i < 9; i++)
+        sum6 += sampleTex[i] * kernel6[i];
+float kernel7[9] = float[](
+        1, 0, 0,
+        1, 1, 0,
+        1, 1, 1
+    );
+  float sum7 = 0;
+for(int i = 0; i < 9; i++)
+        sum7 += sampleTex[i] * kernel7[i];
+float kernel8[9] = float[](
+        0, 0, 1,
+        0, 1, 1,
+        1, 1, 1
+    );
+  float sum8 = 0;
+for(int i = 0; i < 9; i++)
+        sum8 += sampleTex[i] * kernel8[i];
+  float testProd = sum1*sum2*sum3*sum4*sum5*sum6*sum7*sum8;
+if(abs(testProd) < 0.00001) discard;
+  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
 } 
 )foo";
       backgroundFragShader = glCreateShader(GL_FRAGMENT_SHADER);
