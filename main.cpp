@@ -10,6 +10,8 @@
 
 bool firstMouse = true;
 int backgroundFillIters = 2;
+int occlusionFillIters = 1;
+int pointStride = 6;
 int windowHeight = 800;
 int windowWidth = 640;
 float fov = 45.f;
@@ -89,7 +91,6 @@ class RenderWindow
 public:
   RenderWindow()
     : failState(false),
-    pointStride(6),
     pointCount(0),
     model(glm::mat4(1.0)),
     view(glm::mat4(1.0)),
@@ -136,6 +137,11 @@ public:
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * pointStride, (GLvoid*)0);
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(float) * pointStride, (GLvoid*)(sizeof(float) * 3));
+    if (pointStride > 6)
+    {
+      glEnableVertexAttribArray(2);
+      glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(float) * pointStride, (GLvoid*)(sizeof(float) * 6));
+    }
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
   }
@@ -157,8 +163,10 @@ public:
     {
       fillBackground();
     }
-    
-    fillOcclusion();
+    for (int i = 0; i < occlusionFillIters; ++i)
+    {
+      fillOcclusion();
+    }
     glfwSwapBuffers(window);
     glfwPollEvents();
     return true;
@@ -296,7 +304,28 @@ private:
 
     /* Point Vertex Shader */
     {
-      const GLchar* pointVertText = R"foo(
+      const GLchar* pointVertText = pointStride > 6 ? R"foo(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec3 aColor;
+
+out vec3 FragPos;
+out vec3 Normal;
+out vec3 Color;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
+void main()
+{
+    FragPos = vec3(model * vec4(aPos, 1.0));
+    Normal = mat3(transpose(inverse(model))) * aNormal;  
+    Color = aColor;
+    gl_Position = projection * view * vec4(FragPos, 1.0);
+}
+)foo" : R"foo(
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -327,7 +356,46 @@ void main()
     
     /* Point Fragment Shader*/
     {
-      const char* pointFragText = R"foo(
+      const char* pointFragText = pointStride > 6 ? R"foo(
+#version 330 core
+
+in vec3 Normal;  
+in vec3 FragPos;
+in vec3 Color;
+
+layout (location = 0) out vec3 positionTexture;
+layout (location = 1) out vec4 colorDepthTexture;
+uniform vec3 lightPos; 
+uniform vec3 viewPos;
+
+void main()
+{
+    vec3 lightColor = vec3(.1,.1,.1);
+    vec3 objectColor = Color;
+    // ambient
+    float ambientStrength = 0.1;
+    vec3 ambient = ambientStrength * lightColor;
+  	
+    // diffuse 
+    vec3 norm = normalize(Normal);
+    vec3 lightDir = normalize(lightPos - FragPos);
+    if(dot(lightDir,norm) < 0.0) discard;
+    float diff = max(dot(norm, lightDir), 0.0);
+    vec3 diffuse = diff * lightColor;
+    
+    // specular
+    float specularStrength = 0.5;
+    vec3 viewDir = normalize(viewPos - FragPos);
+    vec3 reflectDir = reflect(-lightDir, norm);  
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
+    vec3 specular = specularStrength * spec * lightColor;  
+    
+    float zFar = 100.0;
+    positionTexture = FragPos;
+    colorDepthTexture.rgb = (ambient + diffuse + specular) * objectColor;
+    colorDepthTexture.a =  distance(FragPos, viewPos) / zFar;
+} 
+)foo" : R"foo(
 #version 330 core
 
 in vec3 Normal;  
@@ -638,9 +706,20 @@ void main()
     glfwSwapInterval(1);
     return window;
   }
+  void smooth()
+  {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(occlusionProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindVertexArray(fboVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+  }
   bool failState;
   GLFWwindow* window;
-  int pointStride;
+  
   int pointCount;
   glm::mat4 model;
   glm::mat4 view;
@@ -659,6 +738,9 @@ void main()
   GLuint occlusionVertShader;
   GLuint occlusionFragShader;
   GLuint occlusionProgram;
+  //GLuint occlusionVertShader;
+ // GLuint occlusionFragShader;
+ // GLuint occlusionProgram;
   GLint pointModelLoc;
   GLint pointViewLoc;
   GLint pointProjectionLoc;
@@ -684,14 +766,44 @@ std::vector<float> readPLY(std::filesystem::path const& PLYpath)
   tinyply::PlyFile file;
   file.parse_header(ss);
   auto vertices = file.request_properties_from_element("vertex", { "x", "y", "z", "nx", "ny", "nz" });
+  std::shared_ptr<tinyply::PlyData> colors;
+  try
+  {
+    colors = file.request_properties_from_element("vertex", { "red", "green", "blue" });
+  }
+  catch (...)
+  {
+  }
   file.read(ss);
   if (!vertices)
   {
     throw std::invalid_argument(PLYpath.string() + " is missing elements required");
   }
-  const size_t numVerticesBytes = vertices->buffer.size_bytes();
-  std::vector<float> PLYdata(6*vertices->count);
-  std::memcpy(PLYdata.data(), vertices->buffer.get(), numVerticesBytes);
+  pointStride = colors ? 9 : 6;
+  std::vector<float> PLYdata(pointStride*vertices->count);
+  if (colors)
+  {
+    std::vector<float> vertexPosData(6 * vertices->count);
+    std::memcpy(vertexPosData.data(), vertices->buffer.get(), vertices->buffer.size_bytes());
+    std::vector<std::uint8_t> colorData(3 * vertices->count);
+    std::memcpy(colorData.data(), colors->buffer.get(), colors->buffer.size_bytes());
+    for (int i = 0; i < vertices->count; ++i)
+    {
+      PLYdata[i*pointStride] = vertexPosData[i * 6];
+      PLYdata[i*pointStride+1] = vertexPosData[i * 6 +1];
+      PLYdata[i*pointStride +2] = vertexPosData[i * 6 + 2];
+      PLYdata[i*pointStride + 3] = vertexPosData[i * 6 + 3];
+      PLYdata[i*pointStride + 4] = vertexPosData[i * 6 + 4];
+      PLYdata[i*pointStride + 5] = vertexPosData[i * 6 + 5];
+      PLYdata[i*pointStride + 6] = colorData[i * 3] / 255.f;
+      PLYdata[i*pointStride + 7] = colorData[i * 3 + 1] / 255.f;
+      PLYdata[i*pointStride + 8] = colorData[i * 3 + 2] / 255.f;
+    }
+  }
+  else
+  {
+    std::memcpy(PLYdata.data(), vertices->buffer.get(), vertices->buffer.size_bytes());
+  }
   return PLYdata;
 }
 
