@@ -9,6 +9,7 @@
 #include "third-party/glm/glm/gtc/matrix_transform.hpp"
 
 bool firstMouse = true;
+int backgroundFillIters = 2;
 int windowHeight = 800;
 int windowWidth = 640;
 float fov = 45.f;
@@ -117,6 +118,9 @@ public:
     glDeleteProgram(backgroundProgram);
     glDeleteShader(backgroundVertShader);
     glDeleteShader(backgroundFragShader);
+    glDeleteProgram(occlusionProgram);
+    glDeleteShader(occlusionVertShader);
+    glDeleteShader(occlusionFragShader);
     glfwDestroyWindow(window);
     glfwTerminate();
   }
@@ -149,7 +153,12 @@ public:
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     processCamera();
     illuminatePoints();
-    fillBackground();
+    for (int i = 0; i < backgroundFillIters; ++i)
+    {
+      fillBackground();
+    }
+    
+    fillOcclusion();
     glfwSwapBuffers(window);
     glfwPollEvents();
     return true;
@@ -187,8 +196,26 @@ private:
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(backgroundProgram);
     glActiveTexture(GL_TEXTURE0);
-//     glBindTexture(GL_TEXTURE_2D, positionTexture);
-//     glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindVertexArray(fboVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gBuffer);
+    glBlitFramebuffer(0, 0, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glDrawBuffers(2, attachments);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+  void fillOcclusion()
+  {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(occlusionProgram);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -197,6 +224,7 @@ private:
   void illuminatePoints()
   {
     glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+    glClearColor(0.f, 0.f, 0.f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(pointProgram);
     glUniformMatrix4fv(pointModelLoc, 1, GL_FALSE, &model[0][0]);
@@ -218,7 +246,7 @@ private:
     lastFrame = currentFrame;
     processInput(window);
     view = glm::lookAt(viewPos, viewPos + cameraFront, cameraUp);
-    projection = glm::perspective(glm::radians(fov), (float)windowWidth / (float)windowHeight, .1f, 100.f);
+    projection = glm::perspective(glm::radians(fov), (float)windowWidth / (float)windowHeight, .01f, 100.f);
   }
   void setupShaders()
   {
@@ -238,7 +266,7 @@ private:
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
       glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, colorDepthTexture, 0);
-      unsigned int attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+      GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
       glDrawBuffers(2, attachments);
       glGenRenderbuffers(1, &depthRenderBuffer);
       glBindRenderbuffer(GL_RENDERBUFFER, depthRenderBuffer);
@@ -332,9 +360,10 @@ void main()
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
     vec3 specular = specularStrength * spec * lightColor;  
     
+    float zFar = 100.0;
     positionTexture = FragPos;
     colorDepthTexture.rgb = (ambient + diffuse + specular) * objectColor;
-    colorDepthTexture.a =  gl_FragCoord.z / gl_FragCoord.w;
+    colorDepthTexture.a =  distance(FragPos, viewPos) / zFar;
 } 
 )foo";
       pointFragShader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -409,25 +438,32 @@ out vec4 FragColor;
 in vec2 TexCoords;
 
 uniform sampler2D colorDepthTexture;
-const float offset = 1.0 / 300.0;  
+const float zeroTol = 1e-6;
 
 void main()
 {
+ivec2 texSize = textureSize(colorDepthTexture, 0);
+vec2 stepSize = 1.0/vec2(float(texSize.x), float(texSize.y));
 vec2 offsets[9] = vec2[](
-        vec2(-offset,  offset), // top-left
-        vec2( 0.0f,    offset), // top-center
-        vec2( offset,  offset), // top-right
-        vec2(-offset,  0.0f),   // center-left
+        vec2(-stepSize.x,  stepSize.y), // top-left
+        vec2( 0.0f,    stepSize.y), // top-center
+        vec2( stepSize.x,  stepSize.y), // top-right
+        vec2(-stepSize.x,  0.0f),   // center-left
         vec2( 0.0f,    0.0f),   // center-center
-        vec2( offset,  0.0f),   // center-right
-        vec2(-offset, -offset), // bottom-left
-        vec2( 0.0f,   -offset), // bottom-center
-        vec2( offset, -offset)  // bottom-right    
+        vec2( stepSize.x,  0.0f),   // center-right
+        vec2(-stepSize.x, -stepSize.y), // bottom-left
+        vec2( 0.0f,   -stepSize.y), // bottom-center
+        vec2( stepSize.x, -stepSize.y)  // bottom-right    
     );
 float sampleTex[9];
     for(int i = 0; i < 9; i++)
         sampleTex[i] = texture(colorDepthTexture, TexCoords.st + offsets[i]).a;
-
+if(abs(sampleTex[4]) > zeroTol)
+{
+  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+}
+else
+{
 float kernel1[9] = float[](
         0, 1, 1,
         0, 1, 1,
@@ -493,8 +529,19 @@ float kernel8[9] = float[](
 for(int i = 0; i < 9; i++)
         sum8 += sampleTex[i] * kernel8[i];
   float testProd = sum1*sum2*sum3*sum4*sum5*sum6*sum7*sum8;
-if(abs(testProd) < 0.00001) discard;
-  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+if(abs(testProd) < zeroTol) discard;
+  float smallestDepth = 100000.0;
+  int smallestInd = 4;
+  for(int i = 0; i < 9; i++)
+  {
+     if(abs(sampleTex[i]) > zeroTol && abs(sampleTex[i]) < smallestDepth)
+     {
+       smallestDepth = abs(sampleTex[i]);
+       smallestInd = i;
+     }
+  }
+  FragColor = texture(colorDepthTexture, TexCoords.st + offsets[smallestInd]).rgba;
+}
 } 
 )foo";
       backgroundFragShader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -513,6 +560,64 @@ if(abs(testProd) < 0.00001) discard;
       glAttachShader(backgroundProgram, backgroundFragShader);
       glLinkProgram(backgroundProgram);
       glUseProgram(backgroundProgram);
+    }
+
+    /* Occlusion Pixel Vertex Shader */
+    {
+      const GLchar* occlusionVertText = R"foo(
+#version 330 core
+
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+
+out vec2 TexCoords;
+
+void main()
+{
+  TexCoords = aTexCoords;
+  gl_Position = vec4(aPos.x, aPos.y, 0.0, 1.0); 
+}
+)foo";
+      occlusionVertShader = glCreateShader(GL_VERTEX_SHADER);
+      glShaderSource(occlusionVertShader, 1, &occlusionVertText, 0);
+      glCompileShader(occlusionVertShader);
+      if (!checkShaderCompile(occlusionVertShader))
+      {
+        return;
+      }
+    }
+
+    /* Occlusion Pixel Fragment Shader */
+    {
+      const char* occlusionFragText = R"foo(
+#version 330 core
+
+out vec4 FragColor;
+in vec2 TexCoords;
+
+uniform sampler2D colorDepthTexture;
+
+void main()
+{
+  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+} 
+)foo";
+      occlusionFragShader = glCreateShader(GL_FRAGMENT_SHADER);
+      glShaderSource(occlusionFragShader, 1, &occlusionFragText, 0);
+      glCompileShader(occlusionFragShader);
+      if (!checkShaderCompile(occlusionFragShader))
+      {
+        return;
+      }
+    }
+
+    /* Occlusion Pixel Program */
+    {
+      occlusionProgram = glCreateProgram();
+      glAttachShader(occlusionProgram, occlusionVertShader);
+      glAttachShader(occlusionProgram, occlusionFragShader);
+      glLinkProgram(occlusionProgram);
+      glUseProgram(occlusionProgram);
     }
   }
   GLFWwindow* setupWindow()
@@ -551,6 +656,9 @@ if(abs(testProd) < 0.00001) discard;
   GLuint backgroundVertShader;
   GLuint backgroundFragShader;
   GLuint backgroundProgram;
+  GLuint occlusionVertShader;
+  GLuint occlusionFragShader;
+  GLuint occlusionProgram;
   GLint pointModelLoc;
   GLint pointViewLoc;
   GLint pointProjectionLoc;
