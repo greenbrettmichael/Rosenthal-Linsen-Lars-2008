@@ -1,5 +1,5 @@
 project(Rosenthal-Linsen-Lars-2008)
 add_subdirectory(third-party)
 add_executable(Rosenthal-Linsen-Lars-2008 main.cpp)
-target_link_libraries(Rosenthal-Linsen-Lars-2008 glad glfw tinyply)
+target_link_libraries(Rosenthal-Linsen-Lars-2008 glad glfw glm tinyply)
 set_target_properties(Rosenthal-Linsen-Lars-2008 PROPERTIES CXX_STANDARD 17)

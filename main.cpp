@@ -5,11 +5,84 @@
 #include "third-party/tinyply/source/tinyply.h"
 #include "build/third-party/glad/include/glad/glad.h"
 #include "third-party/glfw/include/GLFW/glfw3.h"
+#include "third-party/glm/glm/glm.hpp"
+#include "third-party/glm/glm/gtc/matrix_transform.hpp"
 
-void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
+bool firstMouse = true;
+int windowHeight = 1024;
+int windowWidth = 1024;
+float fov = 45.f;
+float pitch = 0.f;
+float yaw = 0.f;
+float deltaTime = 0.0f;
+float lastFrame = 0.0f;
+glm::vec3 viewPos = glm::vec3(0.f, 0.f, 0.f);
+glm::vec3 cameraFront = glm::vec3(0.f, 0.f, -1.f);
+glm::vec3 cameraUp = glm::vec3(0.f, 1.f, 0.f);
+
+void processInput(GLFWwindow* window)
 {
-  if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+  if (glfwGetKey(window,GLFW_KEY_ESCAPE) == GLFW_PRESS)
+  {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
+  }
+  float cameraSpeed = 2.5f * deltaTime;
+  if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+  {
+    viewPos += cameraSpeed * cameraFront;
+  }
+  if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+  {
+    viewPos -= cameraSpeed * cameraFront;
+  }
+  if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+  {
+    viewPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+  }
+  if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+  {
+    viewPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+  }
+}
+void framebuffer_size_callback(GLFWwindow* window, int width, int height)
+{
+  firstMouse = true;
+  windowWidth = width;
+  windowHeight = height;
+  glViewport(0, 0, width, height);
+}
+void mouse_callback(GLFWwindow* window, double xpos, double ypos)
+{
+  static double lastX;
+  static double lastY;
+  if (firstMouse)
+  {
+    lastX = xpos;
+    lastY = ypos;
+    firstMouse = false;
+  }
+  float xoffset = (float)(xpos - lastX);
+  float yoffset = (float)(lastY - ypos);
+  lastX = xpos;
+  lastY = ypos;
+  float sensitivity = 0.1f;
+  xoffset *= sensitivity;
+  yoffset *= sensitivity;
+  yaw += xoffset;
+  pitch += yoffset;
+  pitch = std::min(pitch, 89.f);
+  pitch = std::max(pitch, -89.f);
+  glm::vec3 front;
+  front.x = std::cos(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+  front.y = std::sin(glm::radians(pitch));
+  front.z = std::sin(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+  cameraFront = glm::normalize(front);
+}
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
+{
+  fov -= (float)yoffset;
+  fov = std::min(fov, 45.f);
+  fov = std::max(fov, 1.f);
 }
 void error_callback(int code, const char* description)
 {
@@ -21,7 +94,13 @@ class RenderWindow
 {
 public:
   RenderWindow()
-    : pointStride(6), windowWidth(1024), windowHeight(1024), failState(false)
+    : failState(false),
+    pointStride(6),
+    pointCount(0),
+    model(glm::mat4(1.0)),
+    view(glm::mat4(1.0)),
+    projection(glm::mat4(1.0)),
+    lightPos(glm::vec3(0.0,2.0,0.0))
   {
     window = setupWindow();
     if (window)
@@ -31,6 +110,8 @@ public:
   }
   ~RenderWindow()
   {
+    glDeleteVertexArrays(1, &pointVAO);
+    glDeleteBuffers(1, &pointVBO);
     glDeleteProgram(pointProgram);
     glDeleteShader(pointVertShader);
     glDeleteShader(pointFragShader);
@@ -39,7 +120,18 @@ public:
   }
   void load(std::vector<float> PLYData)
   {
-
+    pointCount = (int)PLYData.size() / pointStride;
+    glGenVertexArrays(1, &pointVAO);
+    glBindVertexArray(pointVAO);
+    glGenBuffers(1, &pointVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, pointVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * PLYData.size(), PLYData.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * pointStride, (GLvoid*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(float) * pointStride, (GLvoid*)(sizeof(float) * 3));
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
   }
   bool render()
   {
@@ -51,7 +143,14 @@ public:
     {
       return false;
     }
-
+    processCamera();
+    glClearColor(1.f, 1.f, 1.f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(pointProgram);
+    glBindVertexArray(pointVAO);
+    glDrawArrays(GL_POINTS, 0, pointCount);
+    glBindVertexArray(0);
+    glfwSwapBuffers(window);
     glfwPollEvents();
     return true;
   }
@@ -81,8 +180,22 @@ private:
       failState = true;
     }
     return isCompiled != GL_FALSE;
+  } 
+  void processCamera()
+  {
+    float currentFrame = (float)glfwGetTime();
+    deltaTime = currentFrame - lastFrame;
+    lastFrame = currentFrame;
+    processInput(window);
+    view = glm::lookAt(viewPos, viewPos + cameraFront, cameraUp);
+    projection = glm::perspective(glm::radians(fov), (float)windowWidth / (float)windowHeight, .1f, 100.f);
+    glUseProgram(pointProgram);
+    glUniformMatrix4fv(pointModelLoc, 1, GL_FALSE, &model[0][0]);
+    glUniformMatrix4fv(pointViewLoc, 1, GL_FALSE, &view[0][0]);
+    glUniformMatrix4fv(pointProjectionLoc, 1, GL_FALSE, &projection[0][0]);
+    glUniform3fv(pointLightPosLoc, 1, &viewPos[0]);
+    glUniform3fv(pointViewPosLoc, 1, &viewPos[0]);
   }
-  
   void setupShaders()
   {
     /* Point Vertex Shader */
@@ -201,7 +314,10 @@ void main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     GLFWwindow* window = glfwCreateWindow(windowWidth, windowHeight, "Rosenthal-Linsen-Lars-2008", NULL, NULL);
-    glfwSetKeyCallback(window, key_callback);
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetCursorPosCallback(window, mouse_callback);
+    glfwSetScrollCallback(window, scroll_callback);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwMakeContextCurrent(window);
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
     glfwSwapInterval(1);
@@ -210,8 +326,13 @@ void main()
   bool failState;
   GLFWwindow* window;
   int pointStride;
-  int windowHeight;
-  int windowWidth;
+  int pointCount;
+  glm::mat4 model;
+  glm::mat4 view;
+  glm::mat4 projection;
+  glm::vec3 lightPos;
+  GLuint pointVAO;
+  GLuint pointVBO;
   GLuint pointVertShader;
   GLuint pointFragShader;
   GLuint pointProgram;
@@ -224,7 +345,6 @@ void main()
 
 std::vector<float> readPLY(std::filesystem::path const& PLYpath)
 {
-  
   if (!std::filesystem::exists(PLYpath))
   {
     throw std::invalid_argument(PLYpath.string() + " does not exist");

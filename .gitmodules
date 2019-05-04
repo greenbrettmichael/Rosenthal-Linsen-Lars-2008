@@ -10,3 +10,7 @@
 	path = third-party/glfw
 	url = https://github.com/glfw/glfw.git
 	branch = master
+[submodule "third-party/glm"]
+	path = third-party/glm
+	url = https://github.com/g-truc/glm.git
+	branch = master
