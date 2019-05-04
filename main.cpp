@@ -112,6 +112,11 @@ public:
     glDeleteTextures(1, &colorDepthTexture);
     glDeleteTextures(1, &positionTexture);
     glDeleteRenderbuffers(1, &depthRenderBuffer);
+    glDeleteVertexArrays(1, &fboVAO);
+    glDeleteBuffers(1, &fboVBO);
+    glDeleteProgram(backgroundProgram);
+    glDeleteShader(backgroundVertShader);
+    glDeleteShader(backgroundFragShader);
     glfwDestroyWindow(window);
     glfwTerminate();
   }
@@ -144,6 +149,7 @@ public:
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     processCamera();
     illuminatePoints();
+    fillBackground();
     glfwSwapBuffers(window);
     glfwPollEvents();
     return true;
@@ -175,6 +181,19 @@ private:
     }
     return isCompiled != GL_FALSE;
   } 
+  void fillBackground()
+  {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(backgroundProgram);
+    glActiveTexture(GL_TEXTURE0);
+//     glBindTexture(GL_TEXTURE_2D, positionTexture);
+//     glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindVertexArray(fboVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+  }
   void illuminatePoints()
   {
     glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
@@ -218,7 +237,9 @@ private:
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, windowWidth, windowHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, colorDepthTexture, 0);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, colorDepthTexture, 0);
+      unsigned int attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+      glDrawBuffers(2, attachments);
       glGenRenderbuffers(1, &depthRenderBuffer);
       glBindRenderbuffer(GL_RENDERBUFFER, depthRenderBuffer);
       glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, windowWidth, windowHeight);
@@ -230,6 +251,19 @@ private:
         return;
       }
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      glGenVertexArrays(1, &fboVAO);
+      glBindVertexArray(fboVAO);
+      glGenBuffers(1, &fboVBO);
+      glBindBuffer(GL_ARRAY_BUFFER, fboVBO);
+      float const quadVertices[] = { -1.0f, 1.0f, 0.0f, 1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 1.0f, 0.0f,
+
+        -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+      glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+      glEnableVertexAttribArray(1);
+      glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+      glBindVertexArray(0);
     }
 
     /* Point Vertex Shader */
@@ -340,6 +374,66 @@ void main()
         return;
       }
     }
+
+    /* Background Pixel Vertex Shader */
+    {
+      const GLchar* backgroundVertText = R"foo(
+#version 330 core
+
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+
+out vec2 TexCoords;
+
+void main()
+{
+  TexCoords = aTexCoords;
+  gl_Position = vec4(aPos.x, aPos.y, 0.0, 1.0); 
+}
+)foo";
+      backgroundVertShader = glCreateShader(GL_VERTEX_SHADER);
+      glShaderSource(backgroundVertShader, 1, &backgroundVertText, 0);
+      glCompileShader(backgroundVertShader);
+      if (!checkShaderCompile(backgroundVertShader))
+      {
+        return;
+      }
+    }
+
+    /* Background Pixel Fragment Shader */
+    {
+      const char* backgroundFragText = R"foo(
+#version 330 core
+
+out vec4 FragColor;
+in vec2 TexCoords;
+
+//uniform sampler2D positionTexture;
+uniform sampler2D colorDepthTexture;
+
+void main()
+{
+  vec3 col = texture(colorDepthTexture, TexCoords).rgb;
+  FragColor = vec4(col, 1.0);
+} 
+)foo";
+      backgroundFragShader = glCreateShader(GL_FRAGMENT_SHADER);
+      glShaderSource(backgroundFragShader, 1, &backgroundFragText, 0);
+      glCompileShader(backgroundFragShader);
+      if (!checkShaderCompile(backgroundFragShader))
+      {
+        return;
+      }
+    }
+
+    /* Background Pixel Program */
+    {
+      backgroundProgram = glCreateProgram();
+      glAttachShader(backgroundProgram, backgroundVertShader);
+      glAttachShader(backgroundProgram, backgroundFragShader);
+      glLinkProgram(backgroundProgram);
+      glUseProgram(backgroundProgram);
+    }
   }
   GLFWwindow* setupWindow()
   {
@@ -372,6 +466,11 @@ void main()
   GLuint pointVertShader;
   GLuint pointFragShader;
   GLuint pointProgram;
+  GLuint fboVAO;
+  GLuint fboVBO;
+  GLuint backgroundVertShader;
+  GLuint backgroundFragShader;
+  GLuint backgroundProgram;
   GLint pointModelLoc;
   GLint pointViewLoc;
   GLint pointProjectionLoc;
