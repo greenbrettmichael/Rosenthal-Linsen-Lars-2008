@@ -146,6 +146,7 @@ public:
     processCamera();
     glClearColor(1.f, 1.f, 1.f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
     glUseProgram(pointProgram);
     glBindVertexArray(pointVAO);
     glDrawArrays(GL_POINTS, 0, pointCount);
@@ -252,6 +253,7 @@ void main()
     // diffuse 
     vec3 norm = normalize(Normal);
     vec3 lightDir = normalize(lightPos - FragPos);
+    if(dot(lightDir,norm) < 0.0) discard;
     float diff = max(dot(norm, lightDir), 0.0);
     vec3 diffuse = diff * lightColor;
     
