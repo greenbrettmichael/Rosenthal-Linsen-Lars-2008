@@ -108,6 +108,10 @@ public:
     glDeleteProgram(pointProgram);
     glDeleteShader(pointVertShader);
     glDeleteShader(pointFragShader);
+    glDeleteFramebuffers(1, &gBuffer);
+    glDeleteTextures(1, &colorDepthTexture);
+    glDeleteTextures(1, &positionTexture);
+    glDeleteRenderbuffers(1, &depthRenderBuffer);
     glfwDestroyWindow(window);
     glfwTerminate();
   }
@@ -136,14 +140,10 @@ public:
     {
       return false;
     }
-    processCamera();
     glClearColor(1.f, 1.f, 1.f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
-    glUseProgram(pointProgram);
-    glBindVertexArray(pointVAO);
-    glDrawArrays(GL_POINTS, 0, pointCount);
-    glBindVertexArray(0);
+    processCamera();
+    illuminatePoints();
     glfwSwapBuffers(window);
     glfwPollEvents();
     return true;
@@ -175,6 +175,23 @@ private:
     }
     return isCompiled != GL_FALSE;
   } 
+  void illuminatePoints()
+  {
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(pointProgram);
+    glUniformMatrix4fv(pointModelLoc, 1, GL_FALSE, &model[0][0]);
+    glUniformMatrix4fv(pointViewLoc, 1, GL_FALSE, &view[0][0]);
+    glUniformMatrix4fv(pointProjectionLoc, 1, GL_FALSE, &projection[0][0]);
+    glUniform3fv(pointLightPosLoc, 1, &viewPos[0]);
+    glUniform3fv(pointViewPosLoc, 1, &viewPos[0]);
+    glEnable(GL_DEPTH_TEST);
+    glUseProgram(pointProgram);
+    glBindVertexArray(pointVAO);
+    glDrawArrays(GL_POINTS, 0, pointCount);
+    glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
   void processCamera()
   {
     float currentFrame = (float)glfwGetTime();
@@ -183,15 +200,38 @@ private:
     processInput(window);
     view = glm::lookAt(viewPos, viewPos + cameraFront, cameraUp);
     projection = glm::perspective(glm::radians(fov), (float)windowWidth / (float)windowHeight, .1f, 100.f);
-    glUseProgram(pointProgram);
-    glUniformMatrix4fv(pointModelLoc, 1, GL_FALSE, &model[0][0]);
-    glUniformMatrix4fv(pointViewLoc, 1, GL_FALSE, &view[0][0]);
-    glUniformMatrix4fv(pointProjectionLoc, 1, GL_FALSE, &projection[0][0]);
-    glUniform3fv(pointLightPosLoc, 1, &viewPos[0]);
-    glUniform3fv(pointViewPosLoc, 1, &viewPos[0]);
   }
   void setupShaders()
   {
+    /* Processing Buffers */
+    {
+      glGenFramebuffers(1, &gBuffer);
+      glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+      glGenTextures(1, &positionTexture);
+      glBindTexture(GL_TEXTURE_2D, positionTexture);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, windowWidth, windowHeight, 0, GL_RGB, GL_FLOAT, NULL);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, positionTexture, 0);
+      glGenTextures(1, &colorDepthTexture);
+      glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, windowWidth, windowHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, colorDepthTexture, 0);
+      glGenRenderbuffers(1, &depthRenderBuffer);
+      glBindRenderbuffer(GL_RENDERBUFFER, depthRenderBuffer);
+      glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, windowWidth, windowHeight);
+      glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRenderBuffer);
+      if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      {
+        std::cerr << "PROCESSING BUFFER COULD NOT BE CREATED" << std::endl;
+        failState = true;
+        return;
+      }
+      glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
     /* Point Vertex Shader */
     {
       const GLchar* pointVertText = R"foo(
@@ -227,11 +267,12 @@ void main()
     {
       const char* pointFragText = R"foo(
 #version 330 core
-out vec4 FragColor;
 
 in vec3 Normal;  
 in vec3 FragPos;  
-  
+
+layout (location = 0) out vec3 positionTexture;
+layout (location = 1) out vec4 colorDepthTexture;
 uniform vec3 lightPos; 
 uniform vec3 viewPos;
 
@@ -256,9 +297,10 @@ void main()
     vec3 reflectDir = reflect(-lightDir, norm);  
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
     vec3 specular = specularStrength * spec * lightColor;  
-        
-    vec3 result = (ambient + diffuse + specular) * objectColor;
-    FragColor = vec4(result, 1.0);
+    
+    positionTexture = FragPos;
+    colorDepthTexture.rgb = (ambient + diffuse + specular) * objectColor;
+    colorDepthTexture.a =  gl_FragCoord.z / gl_FragCoord.w;
 } 
 )foo";
       pointFragShader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -335,6 +377,10 @@ void main()
   GLint pointProjectionLoc;
   GLint pointLightPosLoc;
   GLint pointViewPosLoc;
+  GLuint gBuffer;
+  GLuint colorDepthTexture;
+  GLuint positionTexture;
+  GLuint depthRenderBuffer;
 };
 
 std::vector<float> readPLY(std::filesystem::path const& PLYpath)
