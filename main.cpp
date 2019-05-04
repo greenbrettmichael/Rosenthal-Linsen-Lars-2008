@@ -44,13 +44,6 @@ void processInput(GLFWwindow* window)
     viewPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
   }
 }
-void framebuffer_size_callback(GLFWwindow* window, int width, int height)
-{
-  firstMouse = true;
-  windowWidth = width;
-  windowHeight = height;
-  glViewport(0, 0, width, height);
-}
 void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 {
   static double lastX;
@@ -316,7 +309,6 @@ void main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     GLFWwindow* window = glfwCreateWindow(windowWidth, windowHeight, "Rosenthal-Linsen-Lars-2008", NULL, NULL);
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
