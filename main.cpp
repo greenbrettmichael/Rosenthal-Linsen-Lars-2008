@@ -11,7 +11,6 @@
 bool firstMouse = true;
 int backgroundFillIters = 1;
 int occlusionFillIters = 1;
-int smoothFillIters = 1;
 int pointStride = 6;
 int windowHeight = 800;
 int windowWidth = 640;
@@ -93,6 +92,7 @@ public:
   RenderWindow()
     : failState(false),
     pointCount(0),
+    currBuffer(0),
     model(glm::mat4(1.0)),
     view(glm::mat4(1.0)),
     projection(glm::mat4(1.0)),
@@ -111,10 +111,11 @@ public:
     glDeleteProgram(pointProgram);
     glDeleteShader(pointVertShader);
     glDeleteShader(pointFragShader);
-    glDeleteFramebuffers(1, &gBuffer);
-    glDeleteTextures(1, &colorDepthTexture);
-    glDeleteTextures(1, &positionTexture);
-    glDeleteRenderbuffers(1, &depthRenderBuffer);
+    glDeleteFramebuffers(2, &gBuffer[0]);
+    glDeleteTextures(2, &positionTexture[0]);
+    glDeleteTextures(2, &normalTexture[0]);
+    glDeleteTextures(2, &colorTexture[0]);
+    glDeleteRenderbuffers(3, &depthRenderBuffer[0]);
     glDeleteVertexArrays(1, &fboVAO);
     glDeleteBuffers(1, &fboVBO);
     glDeleteProgram(backgroundProgram);
@@ -179,10 +180,7 @@ public:
     {
       fillOcclusion();
     }
-    for (int i = 0; i < smoothFillIters; ++i)
-    {
-      smooth();
-    }
+    smooth();
     aliasing();
     illustrateEffect();
     glfwSwapBuffers(window);
@@ -192,31 +190,32 @@ public:
 private:
   void aliasing()
   {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glEnable(GL_DEPTH_TEST);
+    int nextBuffer = currBuffer ^ 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer[nextBuffer]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(aaHighProgram);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindTexture(GL_TEXTURE_2D, positionTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, normalTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, colorTexture[currBuffer]);
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
     glClear(GL_DEPTH_BUFFER_BIT);
     glUseProgram(aaLowProgram);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindTexture(GL_TEXTURE_2D, positionTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, normalTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, colorTexture[currBuffer]);
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawBuffer(GL_COLOR_ATTACHMENT1);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gBuffer);
-    glBlitFramebuffer(0, 0, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    glDrawBuffers(2, attachments);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    currBuffer = nextBuffer;
   }
   bool assignShaderUniform(GLuint programID, GLint& locID, const GLchar* locName)
   {
@@ -228,7 +227,7 @@ private:
     }
     return locID >= 0;
   }
-  bool checkShaderCompile(GLuint shaderID)
+  bool checkShaderCompile(GLuint shaderID, const char* shaderName)
   {
     GLint isCompiled = 0;
     glGetShaderiv(shaderID, GL_COMPILE_STATUS, &isCompiled);
@@ -239,6 +238,7 @@ private:
       std::string errorLog;
       errorLog.resize(maxLength);
       glGetShaderInfoLog(shaderID, maxLength, &maxLength, &errorLog[0]);
+      std::cout << shaderName << " FAILED TO COMPILE" << std::endl;
       std::cerr << errorLog << std::endl;
       failState = true;
     }
@@ -246,47 +246,43 @@ private:
   } 
   void fillBackground()
   {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    int nextBuffer = currBuffer ^ 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer[nextBuffer]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(backgroundProgram);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindTexture(GL_TEXTURE_2D, positionTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, normalTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, colorTexture[currBuffer]);
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawBuffer(GL_COLOR_ATTACHMENT1);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gBuffer);
-    glBlitFramebuffer(0, 0, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    glDrawBuffers(2, attachments);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    currBuffer = nextBuffer;
   }
   void fillOcclusion()
   {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    int nextBuffer = currBuffer ^ 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer[nextBuffer]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(occlusionProgram);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindTexture(GL_TEXTURE_2D, positionTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, normalTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, colorTexture[currBuffer]);
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawBuffer(GL_COLOR_ATTACHMENT1);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gBuffer);
-    glBlitFramebuffer(0, 0, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    glDrawBuffers(2, attachments);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    currBuffer = nextBuffer;
   }
   void illuminatePoints()
   {
-    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer[currBuffer]);
     glClearColor(0.f, 0.f, 0.f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(pointProgram);
@@ -306,9 +302,13 @@ private:
   {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glUseProgram(smoothProgram);
+    glUseProgram(illustrateProgram);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindTexture(GL_TEXTURE_2D, positionTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, normalTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, colorTexture[currBuffer]);
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
@@ -326,33 +326,42 @@ private:
   {
     /* Processing Buffers */
     {
-      glGenFramebuffers(1, &gBuffer);
-      glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
-      glGenTextures(1, &positionTexture);
-      glBindTexture(GL_TEXTURE_2D, positionTexture);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, windowWidth, windowHeight, 0, GL_RGB, GL_FLOAT, NULL);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, positionTexture, 0);
-      glGenTextures(1, &colorDepthTexture);
-      glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, windowWidth, windowHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, colorDepthTexture, 0);
-      GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-      glDrawBuffers(2, attachments);
-      glGenRenderbuffers(1, &depthRenderBuffer);
-      glBindRenderbuffer(GL_RENDERBUFFER, depthRenderBuffer);
-      glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, windowWidth, windowHeight);
-      glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRenderBuffer);
-      if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      glGenFramebuffers(2, &gBuffer[0]);
+      glGenTextures(2, &positionTexture[0]);
+      glGenTextures(2, &normalTexture[0]);
+      glGenTextures(2, &colorTexture[0]);
+      glGenRenderbuffers(2, &depthRenderBuffer[0]);
+      for (int i = 0; i < 2; ++i)
       {
-        std::cerr << "PROCESSING BUFFER COULD NOT BE CREATED" << std::endl;
-        failState = true;
-        return;
+        glBindFramebuffer(GL_FRAMEBUFFER, gBuffer[i]);
+        glBindTexture(GL_TEXTURE_2D, positionTexture[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, windowWidth, windowHeight, 0, GL_RGBA, GL_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, positionTexture[i], 0);
+        glBindTexture(GL_TEXTURE_2D, normalTexture[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, windowWidth, windowHeight, 0, GL_RGB, GL_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, normalTexture[i], 0);
+        glBindTexture(GL_TEXTURE_2D, colorTexture[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, windowWidth, windowHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, colorTexture[i], 0);
+        GLuint attachments[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
+        glDrawBuffers(3, attachments);
+        glBindRenderbuffer(GL_RENDERBUFFER, depthRenderBuffer[i]);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, windowWidth, windowHeight);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRenderBuffer[i]);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        {
+          std::cerr << "PROCESSING BUFFER COULD NOT BE CREATED" << std::endl;
+          failState = true;
+          return;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
       }
-      glBindFramebuffer(GL_FRAMEBUFFER, 0);
       glGenVertexArrays(1, &fboVAO);
       glBindVertexArray(fboVAO);
       glGenBuffers(1, &fboVBO);
@@ -414,7 +423,7 @@ void main()
       pointVertShader = glCreateShader(GL_VERTEX_SHADER);
       glShaderSource(pointVertShader, 1, &pointVertText, 0);
       glCompileShader(pointVertShader);
-      if (!checkShaderCompile(pointVertShader))
+      if (!checkShaderCompile(pointVertShader, "ILLUMINATE VERTEX"))
       {
         return;
       }
@@ -429,8 +438,9 @@ in vec3 Normal;
 in vec3 FragPos;
 in vec3 Color;
 
-layout (location = 0) out vec3 positionTexture;
-layout (location = 1) out vec4 colorDepthTexture;
+layout (location = 0) out vec4 positionTexture;
+layout (location = 1) out vec3 normalTexture;
+layout (location = 2) out vec4 colorTexture;
 uniform vec3 lightPos; 
 uniform vec3 viewPos;
 
@@ -456,10 +466,11 @@ void main()
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
     vec3 specular = specularStrength * spec * lightColor;  
     
-    float zFar = 100.0;
-    positionTexture = FragPos;
-    colorDepthTexture.rgb = (ambient + diffuse + specular) * objectColor;
-    colorDepthTexture.a =  distance(FragPos, viewPos) / zFar;
+    float zFar = 100.0;  
+    normalTexture = Normal;
+    colorTexture.rgba = vec4((ambient + diffuse + specular) * objectColor, 1.0);
+    positionTexture.xyz = FragPos;
+    positionTexture.a =  distance(FragPos, viewPos) / zFar;
 } 
 )foo" : R"foo(
 #version 330 core
@@ -467,8 +478,9 @@ void main()
 in vec3 Normal;  
 in vec3 FragPos;  
 
-layout (location = 0) out vec3 positionTexture;
-layout (location = 1) out vec4 colorDepthTexture;
+layout (location = 0) out vec4 positionTexture;
+layout (location = 1) out vec3 normalTexture;
+layout (location = 2) out vec4 colorTexture;
 uniform vec3 lightPos; 
 uniform vec3 viewPos;
 
@@ -495,15 +507,16 @@ void main()
     vec3 specular = specularStrength * spec * lightColor;  
     
     float zFar = 100.0;
-    positionTexture = FragPos;
-    colorDepthTexture.rgb = (ambient + diffuse + specular) * objectColor;
-    colorDepthTexture.a =  distance(FragPos, viewPos) / zFar;
+    normalTexture = Normal;
+    colorTexture.rgba = vec4((ambient + diffuse + specular) * objectColor, 1.0);
+    positionTexture.xyz = FragPos;
+    positionTexture.a =  distance(FragPos, viewPos) / zFar;
 } 
 )foo";
       pointFragShader = glCreateShader(GL_FRAGMENT_SHADER);
       glShaderSource(pointFragShader, 1, &pointFragText, 0);
       glCompileShader(pointFragShader);
-      if (!checkShaderCompile(pointFragShader))
+      if (!checkShaderCompile(pointFragShader, "ILLUMINATE FRAGMENT"))
       {
         return;
       }
@@ -557,7 +570,7 @@ void main()
       backgroundVertShader = glCreateShader(GL_VERTEX_SHADER);
       glShaderSource(backgroundVertShader, 1, &backgroundVertText, 0);
       glCompileShader(backgroundVertShader);
-      if (!checkShaderCompile(backgroundVertShader))
+      if (!checkShaderCompile(backgroundVertShader, "BACKGROUND FILL VERTEX"))
       {
         return;
       }
@@ -566,17 +579,21 @@ void main()
     /* Background Pixel Fragment Shader */
     {
       const char* backgroundFragText = R"foo(
-#version 330 core
+#version 420
 
-out vec4 FragColor;
 in vec2 TexCoords;
 
-uniform sampler2D colorDepthTexture;
+layout (location = 0) out vec4 positionTextureOut;
+layout (location = 1) out vec3 normalTextureOut;
+layout (location = 2) out vec4 colorTextureOut;
+layout(binding=0) uniform sampler2D positionTextureIn;
+layout(binding=1) uniform sampler2D normalTextureIn;
+layout(binding=2) uniform sampler2D colorTextureIn;
 const float zeroTol = 1e-6;
 
 void main()
 {
-ivec2 texSize = textureSize(colorDepthTexture, 0);
+ivec2 texSize = textureSize(positionTextureIn, 0);
 vec2 stepSize = 1.0/vec2(float(texSize.x), float(texSize.y));
 vec2 offsets[9] = vec2[](
         vec2(-stepSize.x,  stepSize.y), // top-left
@@ -591,10 +608,12 @@ vec2 offsets[9] = vec2[](
     );
 float sampleTex[9];
     for(int i = 0; i < 9; i++)
-        sampleTex[i] = texture(colorDepthTexture, TexCoords.st + offsets[i]).a;
+        sampleTex[i] = texture(positionTextureIn, TexCoords.st + offsets[i]).a;
 if(abs(sampleTex[4]) > zeroTol)
 {
-  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+  positionTextureOut = texture(positionTextureIn, TexCoords.st);
+  normalTextureOut = texture(normalTextureIn, TexCoords.st).xyz;
+  colorTextureOut = texture(colorTextureIn, TexCoords.st);
 }
 else
 {
@@ -674,14 +693,16 @@ if(abs(testProd) < zeroTol) discard;
        smallestInd = i;
      }
   }
-  FragColor = texture(colorDepthTexture, TexCoords.st + offsets[smallestInd]).rgba;
+  positionTextureOut = texture(positionTextureIn, TexCoords.st + offsets[smallestInd]);
+  normalTextureOut = texture(normalTextureIn, TexCoords.st + offsets[smallestInd]).xyz;
+  colorTextureOut = texture(colorTextureIn, TexCoords.st + offsets[smallestInd]);
 }
 } 
 )foo";
       backgroundFragShader = glCreateShader(GL_FRAGMENT_SHADER);
       glShaderSource(backgroundFragShader, 1, &backgroundFragText, 0);
       glCompileShader(backgroundFragShader);
-      if (!checkShaderCompile(backgroundFragShader))
+      if (!checkShaderCompile(backgroundFragShader, "BACKGROUND FILL FRAGMENT"))
       {
         return;
       }
@@ -715,7 +736,7 @@ void main()
       occlusionVertShader = glCreateShader(GL_VERTEX_SHADER);
       glShaderSource(occlusionVertShader, 1, &occlusionVertText, 0);
       glCompileShader(occlusionVertShader);
-      if (!checkShaderCompile(occlusionVertShader))
+      if (!checkShaderCompile(occlusionVertShader, "OCCLUSION FILL VERTEX"))
       {
         return;
       }
@@ -724,17 +745,21 @@ void main()
     /* Occlusion Pixel Fragment Shader */
     {
       const char* occlusionFragText = R"foo(
-#version 330 core
+#version 420
 
-out vec4 FragColor;
 in vec2 TexCoords;
 
-uniform sampler2D colorDepthTexture;
+layout (location = 0) out vec4 positionTextureOut;
+layout (location = 1) out vec3 normalTextureOut;
+layout (location = 2) out vec4 colorTextureOut;
+layout(binding=0) uniform sampler2D positionTextureIn;
+layout(binding=1) uniform sampler2D normalTextureIn;
+layout(binding=2) uniform sampler2D colorTextureIn;
 const float zeroTol = 1e-6;
 
 void main()
 {
-ivec2 texSize = textureSize(colorDepthTexture, 0);
+ivec2 texSize = textureSize(positionTextureIn, 0);
 vec2 stepSize = 1.0/vec2(float(texSize.x), float(texSize.y));
 vec2 offsets[9] = vec2[](
         vec2(-stepSize.x,  stepSize.y), // top-left
@@ -749,10 +774,12 @@ vec2 offsets[9] = vec2[](
     );
 float sampleTex[9];
     for(int i = 0; i < 9; i++)
-        sampleTex[i] = texture(colorDepthTexture, TexCoords.st + offsets[i]).a;
+        sampleTex[i] = texture(positionTextureIn, TexCoords.st + offsets[i]).a;
 if(abs(sampleTex[4]) < zeroTol)
 {
-  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+  positionTextureOut = texture(positionTextureIn, TexCoords.st);
+  normalTextureOut = texture(normalTextureIn, TexCoords.st).xyz;
+  colorTextureOut = texture(colorTextureIn, TexCoords.st);
 }
 else
 {
@@ -823,7 +850,9 @@ for(int i = 0; i < 9; i++)
   float testProd = sum1*sum2*sum3*sum4*sum5*sum6*sum7*sum8;
   if(abs(testProd) < zeroTol) 
 {
-FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+  positionTextureOut = texture(positionTextureIn, TexCoords.st);
+  normalTextureOut = texture(normalTextureIn, TexCoords.st).xyz;
+  colorTextureOut = texture(colorTextureIn, TexCoords.st);
 }
 else
 {
@@ -838,7 +867,9 @@ else
        smallestInd = i;
      }
   }
-  FragColor = texture(colorDepthTexture, TexCoords.st + offsets[smallestInd]).rgba;
+  positionTextureOut = texture(positionTextureIn, TexCoords.st + offsets[smallestInd]);
+  normalTextureOut = texture(normalTextureIn, TexCoords.st + offsets[smallestInd]).xyz;
+  colorTextureOut = texture(colorTextureIn, TexCoords.st + offsets[smallestInd]);
 }
 }
 } 
@@ -846,7 +877,7 @@ else
       occlusionFragShader = glCreateShader(GL_FRAGMENT_SHADER);
       glShaderSource(occlusionFragShader, 1, &occlusionFragText, 0);
       glCompileShader(occlusionFragShader);
-      if (!checkShaderCompile(occlusionFragShader))
+      if (!checkShaderCompile(occlusionFragShader, "OCCLUSION FILL FRAGMENT"))
       {
         return;
       }
@@ -880,7 +911,7 @@ void main()
       smoothVertShader = glCreateShader(GL_VERTEX_SHADER);
       glShaderSource(smoothVertShader, 1, &smoothVertText, 0);
       glCompileShader(smoothVertShader);
-      if (!checkShaderCompile(smoothVertShader))
+      if (!checkShaderCompile(smoothVertShader, "SMOOTHING VERTEX"))
       {
         return;
       }
@@ -889,17 +920,21 @@ void main()
     /* Smoothing Fragment Shader */
     {
       const char* smoothFragText = R"foo(
-#version 330 core
+#version 420
 
-out vec4 FragColor;
 in vec2 TexCoords;
 
-uniform sampler2D colorDepthTexture;
+layout (location = 0) out vec4 positionTextureOut;
+layout (location = 1) out vec3 normalTextureOut;
+layout (location = 2) out vec4 colorTextureOut;
+layout(binding=0) uniform sampler2D positionTextureIn;
+layout(binding=1) uniform sampler2D normalTextureIn;
+layout(binding=2) uniform sampler2D colorTextureIn;
 const float zeroTol = 1e-6;
 
 void main()
 {
-ivec2 texSize = textureSize(colorDepthTexture, 0);
+ivec2 texSize = textureSize(positionTextureIn, 0);
 vec2 stepSize = 1.0/vec2(float(texSize.x), float(texSize.y));
 vec2 offsets[9] = vec2[](
         vec2(-stepSize.x,  stepSize.y), // top-left
@@ -914,10 +949,12 @@ vec2 offsets[9] = vec2[](
     );
 float sampleTex[9];
     for(int i = 0; i < 9; i++)
-        sampleTex[i] = texture(colorDepthTexture, TexCoords.st + offsets[i]).a;
+        sampleTex[i] = texture(positionTextureIn, TexCoords.st + offsets[i]).a;
 if(abs(sampleTex[4]) < zeroTol)
 {
-  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+  positionTextureOut = texture(positionTextureIn, TexCoords.st);
+  normalTextureOut = texture(normalTextureIn, TexCoords.st).xyz;
+  colorTextureOut = texture(colorTextureIn, TexCoords.st);
 }
 else
 {
@@ -933,14 +970,18 @@ for(int i = 0; i < 9; i++)
   totalWeight += alleviatedGaussian[i];
 }
 for(int i = 0; i < 9; i++)
-        FragColor += (alleviatedGaussian[i] / totalWeight) * texture(colorDepthTexture, TexCoords.st + offsets[i]).rgba;
+{
+  positionTextureOut += (alleviatedGaussian[i] / totalWeight) * texture(positionTextureIn, TexCoords.st + offsets[i]);
+  normalTextureOut += (alleviatedGaussian[i] / totalWeight) * texture(normalTextureIn, TexCoords.st + offsets[i]).xyz;
+  colorTextureOut += (alleviatedGaussian[i] / totalWeight) * texture(colorTextureIn, TexCoords.st + offsets[i]);
+}
 }
 }
 )foo";
       smoothFragShader = glCreateShader(GL_FRAGMENT_SHADER);
       glShaderSource(smoothFragShader, 1, &smoothFragText, 0);
       glCompileShader(smoothFragShader);
-      if (!checkShaderCompile(smoothFragShader))
+      if (!checkShaderCompile(smoothFragShader, "SMOOTHING FRAGMENT"))
       {
         return;
       }
@@ -974,7 +1015,7 @@ void main()
       aaVertShader = glCreateShader(GL_VERTEX_SHADER);
       glShaderSource(aaVertShader, 1, &aaVertText, 0);
       glCompileShader(aaVertShader);
-      if (!checkShaderCompile(aaVertShader))
+      if (!checkShaderCompile(aaVertShader, "ANTI ALIASING VERTEX"))
       {
         return;
       }
@@ -983,16 +1024,20 @@ void main()
     /* Anti-Aliasing Fragment Shader */
     {
       const char* aaFragHighText = R"foo(
-#version 330 core
+#version 420
 
-out vec4 FragColor;
 in vec2 TexCoords;
 
-uniform sampler2D colorDepthTexture;
+layout (location = 0) out vec4 positionTextureOut;
+layout (location = 1) out vec3 normalTextureOut;
+layout (location = 2) out vec4 colorTextureOut;
+layout(binding=0) uniform sampler2D positionTextureIn;
+layout(binding=1) uniform sampler2D normalTextureIn;
+layout(binding=2) uniform sampler2D colorTextureIn;
 
 void main()
 {
-ivec2 texSize = textureSize(colorDepthTexture, 0);
+ivec2 texSize = textureSize(positionTextureIn, 0);
 vec2 stepSize = 1.0/vec2(float(texSize.x), float(texSize.y));
 vec2 offsets[9] = vec2[](
         vec2(-stepSize.x,  stepSize.y), // top-left
@@ -1011,36 +1056,46 @@ float laplaceFilter[9] = float[](
         0.0, -1.0, 0.0
     );
 for(int i = 0; i < 9; i++)
-        FragColor += laplaceFilter[i] * texture(colorDepthTexture, TexCoords.st + offsets[i]).rgba;
+{
+  positionTextureOut += laplaceFilter[i] * texture(positionTextureIn, TexCoords.st + offsets[i]);
+  normalTextureOut += laplaceFilter[i] * texture(normalTextureIn, TexCoords.st + offsets[i]).xyz;
+  colorTextureOut += laplaceFilter[i] * texture(colorTextureIn, TexCoords.st + offsets[i]);
+}
 }
 )foo";
       aaFragHighShader = glCreateShader(GL_FRAGMENT_SHADER);
       glShaderSource(aaFragHighShader, 1, &aaFragHighText, 0);
       glCompileShader(aaFragHighShader);
-      if (!checkShaderCompile(aaFragHighShader))
+      if (!checkShaderCompile(aaFragHighShader, "ANTI ALIASING HIGH-PASS FRAGMENT"))
       {
         return;
       }
       const char* aaFragLowText = R"foo(
-#version 330 core
+#version 420
 
-out vec4 FragColor;
 in vec2 TexCoords;
 
-uniform sampler2D colorDepthTexture;
+layout (location = 0) out vec4 positionTextureOut;
+layout (location = 1) out vec3 normalTextureOut;
+layout (location = 2) out vec4 colorTextureOut;
+layout(binding=0) uniform sampler2D positionTextureIn;
+layout(binding=1) uniform sampler2D normalTextureIn;
+layout(binding=2) uniform sampler2D colorTextureIn;
 const float zeroTol = 1e-6;
 
 void main()
 {
-  vec4 tempColor = texture(colorDepthTexture, TexCoords.st).rgba;
-if(tempColor.a < zeroTol) discard;
-  FragColor = tempColor;
+  float fragPosDepth = texture(positionTextureIn, TexCoords.st).a;
+if(fragPosDepth < zeroTol) discard;
+  positionTextureOut = texture(positionTextureIn, TexCoords.st);
+  normalTextureOut = texture(normalTextureIn, TexCoords.st).xyz;
+  colorTextureOut = texture(colorTextureIn, TexCoords.st);
 } 
 )foo";
       aaFragLowShader = glCreateShader(GL_FRAGMENT_SHADER);
       glShaderSource(aaFragLowShader, 1, &aaFragLowText, 0);
       glCompileShader(aaFragLowShader);
-      if (!checkShaderCompile(aaFragLowShader))
+      if (!checkShaderCompile(aaFragLowShader, "ANTI ALIASING LOW-PASS FRAGMENT"))
       {
         return;
       }
@@ -1079,7 +1134,7 @@ void main()
       illustrateVertShader = glCreateShader(GL_VERTEX_SHADER);
       glShaderSource(illustrateVertShader, 1, &illustrateVertText, 0);
       glCompileShader(illustrateVertShader);
-      if (!checkShaderCompile(illustrateVertShader))
+      if (!checkShaderCompile(illustrateVertShader, "ILLUSTRATE VERTEX"))
       {
         return;
       }
@@ -1088,22 +1143,24 @@ void main()
     /* Illustration Effect Fragment Shader */
     {
       const char* illustrateFragText = R"foo(
-#version 330 core
+#version 420
 
 out vec4 FragColor;
 in vec2 TexCoords;
 
-uniform sampler2D colorDepthTexture;
+layout(binding=0) uniform sampler2D positionTextureIn;
+layout(binding=1) uniform sampler2D normalTextureIn;
+layout(binding=2) uniform sampler2D colorTextureIn;
 
 void main()
 {
-  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+  FragColor = texture(colorTextureIn, TexCoords.st);
 } 
 )foo";
       illustrateFragShader = glCreateShader(GL_FRAGMENT_SHADER);
       glShaderSource(illustrateFragShader, 1, &illustrateFragText, 0);
       glCompileShader(illustrateFragShader);
-      if (!checkShaderCompile(illustrateFragShader))
+      if (!checkShaderCompile(illustrateFragShader, "ILLUSTRATION FRAGMENT"))
       {
         return;
       }
@@ -1125,8 +1182,8 @@ void main()
     {
       return nullptr;
     }
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 4);
     GLFWwindow* window = glfwCreateWindow(windowWidth, windowHeight, "Rosenthal-Linsen-Lars-2008", NULL, NULL);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
@@ -1138,28 +1195,27 @@ void main()
   }
   void smooth()
   {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    int nextBuffer = currBuffer ^ 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer[nextBuffer]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(smoothProgram);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindTexture(GL_TEXTURE_2D, positionTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, normalTexture[currBuffer]);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, colorTexture[currBuffer]);
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawBuffer(GL_COLOR_ATTACHMENT1);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gBuffer);
-    glBlitFramebuffer(0, 0, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    glDrawBuffers(2, attachments);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    currBuffer = nextBuffer;
   }
   bool failState;
   GLFWwindow* window;
   
   int pointCount;
+  int currBuffer;
   glm::mat4 model;
   glm::mat4 view;
   glm::mat4 projection;
@@ -1193,10 +1249,11 @@ void main()
   GLint pointProjectionLoc;
   GLint pointLightPosLoc;
   GLint pointViewPosLoc;
-  GLuint gBuffer;
-  GLuint colorDepthTexture;
-  GLuint positionTexture;
-  GLuint depthRenderBuffer;
+  GLuint gBuffer[2];
+  GLuint positionTexture[2];
+  GLuint normalTexture[2];
+  GLuint colorTexture[2];
+  GLuint depthRenderBuffer[2];
 };
 
 std::vector<float> readPLY(std::filesystem::path const& PLYpath)
