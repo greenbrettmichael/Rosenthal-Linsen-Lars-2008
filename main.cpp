@@ -126,6 +126,9 @@ public:
     glDeleteProgram(smoothProgram);
     glDeleteShader(smoothVertShader);
     glDeleteShader(smoothFragShader);
+    glDeleteProgram(aaProgram);
+    glDeleteShader(aaVertShader);
+    glDeleteShader(aaFragShader);
     glfwDestroyWindow(window);
     glfwTerminate();
   }
@@ -175,11 +178,23 @@ public:
     {
       smooth();
     }
+    aliasing();
     glfwSwapBuffers(window);
     glfwPollEvents();
     return true;
   }
 private:
+  void aliasing()
+  {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(smoothProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
+    glBindVertexArray(fboVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+  }
   bool assignShaderUniform(GLuint programID, GLint& locID, const GLchar* locName)
   {
     locID = glGetUniformLocation(programID, locName);
@@ -846,11 +861,47 @@ out vec4 FragColor;
 in vec2 TexCoords;
 
 uniform sampler2D colorDepthTexture;
+const float zeroTol = 1e-6;
 
 void main()
 {
+ivec2 texSize = textureSize(colorDepthTexture, 0);
+vec2 stepSize = 1.0/vec2(float(texSize.x), float(texSize.y));
+vec2 offsets[9] = vec2[](
+        vec2(-stepSize.x,  stepSize.y), // top-left
+        vec2( 0.0f,    stepSize.y), // top-center
+        vec2( stepSize.x,  stepSize.y), // top-right
+        vec2(-stepSize.x,  0.0f),   // center-left
+        vec2( 0.0f,    0.0f),   // center-center
+        vec2( stepSize.x,  0.0f),   // center-right
+        vec2(-stepSize.x, -stepSize.y), // bottom-left
+        vec2( 0.0f,   -stepSize.y), // bottom-center
+        vec2( stepSize.x, -stepSize.y)  // bottom-right    
+    );
+float sampleTex[9];
+    for(int i = 0; i < 9; i++)
+        sampleTex[i] = texture(colorDepthTexture, TexCoords.st + offsets[i]).a;
+if(abs(sampleTex[4]) < zeroTol)
+{
   FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
-} 
+}
+else
+{
+float alleviatedGaussian[9] = float[](
+        1.0/16.0, 2.0/16.0, 1.0/16.0,
+        2.0/16.0, 16.0/28.0, 2.0/16.0,
+        1.0/16.0, 2.0/16.0, 1.0/16.0
+    );
+float totalWeight = 0.0;
+for(int i = 0; i < 9; i++)
+{
+  alleviatedGaussian[i] *= step(zeroTol, sampleTex[i]);
+  totalWeight += alleviatedGaussian[i];
+}
+for(int i = 0; i < 9; i++)
+        FragColor += (alleviatedGaussian[i] / totalWeight) * texture(colorDepthTexture, TexCoords.st + offsets[i]).rgba;
+}
+}
 )foo";
       smoothFragShader = glCreateShader(GL_FRAGMENT_SHADER);
       glShaderSource(smoothFragShader, 1, &smoothFragText, 0);
@@ -868,6 +919,64 @@ void main()
       glAttachShader(smoothProgram, smoothFragShader);
       glLinkProgram(smoothProgram);
       glUseProgram(smoothProgram);
+    }
+
+    /* Anti-Aliasing Vertex Shader */
+    {
+      const GLchar* aaVertText = R"foo(
+#version 330 core
+
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+
+out vec2 TexCoords;
+
+void main()
+{
+  TexCoords = aTexCoords;
+  gl_Position = vec4(aPos.x, aPos.y, 0.0, 1.0); 
+}
+)foo";
+      aaVertShader = glCreateShader(GL_VERTEX_SHADER);
+      glShaderSource(aaVertShader, 1, &aaVertText, 0);
+      glCompileShader(aaVertShader);
+      if (!checkShaderCompile(aaVertShader))
+      {
+        return;
+      }
+    }
+
+    /* Anti-Aliasing Fragment Shader */
+    {
+      const char* aaFragText = R"foo(
+#version 330 core
+
+out vec4 FragColor;
+in vec2 TexCoords;
+
+uniform sampler2D colorDepthTexture;
+
+void main()
+{
+  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+} 
+)foo";
+      aaFragShader = glCreateShader(GL_FRAGMENT_SHADER);
+      glShaderSource(aaFragShader, 1, &aaFragText, 0);
+      glCompileShader(aaFragShader);
+      if (!checkShaderCompile(aaFragShader))
+      {
+        return;
+      }
+    }
+
+    /* Anti-Aliasing Program */
+    {
+      aaProgram = glCreateProgram();
+      glAttachShader(aaProgram, aaVertShader);
+      glAttachShader(aaProgram, aaFragShader);
+      glLinkProgram(aaProgram);
+      glUseProgram(aaProgram);
     }
   }
   GLFWwindow* setupWindow()
@@ -892,12 +1001,21 @@ void main()
   {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glUseProgram(smoothProgram);
+    glUseProgram(aaProgram);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gBuffer);
+    glBlitFramebuffer(0, 0, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glDrawBuffers(2, attachments);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
   }
   bool failState;
   GLFWwindow* window;
@@ -923,6 +1041,9 @@ void main()
   GLuint smoothVertShader;
   GLuint smoothFragShader;
   GLuint smoothProgram;
+  GLuint aaVertShader;
+  GLuint aaFragShader;
+  GLuint aaProgram;
   GLint pointModelLoc;
   GLint pointViewLoc;
   GLint pointProjectionLoc;
