@@ -9,8 +9,9 @@
 #include "third-party/glm/glm/gtc/matrix_transform.hpp"
 
 bool firstMouse = true;
-int backgroundFillIters = 2;
+int backgroundFillIters = 1;
 int occlusionFillIters = 1;
+int smoothFillIters = 1;
 int pointStride = 6;
 int windowHeight = 800;
 int windowWidth = 640;
@@ -122,6 +123,9 @@ public:
     glDeleteProgram(occlusionProgram);
     glDeleteShader(occlusionVertShader);
     glDeleteShader(occlusionFragShader);
+    glDeleteProgram(smoothProgram);
+    glDeleteShader(smoothVertShader);
+    glDeleteShader(smoothFragShader);
     glfwDestroyWindow(window);
     glfwTerminate();
   }
@@ -166,6 +170,10 @@ public:
     for (int i = 0; i < occlusionFillIters; ++i)
     {
       fillOcclusion();
+    }
+    for (int i = 0; i < smoothFillIters; ++i)
+    {
+      smooth();
     }
     glfwSwapBuffers(window);
     glfwPollEvents();
@@ -228,6 +236,15 @@ private:
     glBindVertexArray(fboVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gBuffer);
+    glBlitFramebuffer(0, 0, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    GLuint attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glDrawBuffers(2, attachments);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
   }
   void illuminatePoints()
   {
@@ -664,10 +681,117 @@ out vec4 FragColor;
 in vec2 TexCoords;
 
 uniform sampler2D colorDepthTexture;
+const float zeroTol = 1e-6;
 
 void main()
 {
+ivec2 texSize = textureSize(colorDepthTexture, 0);
+vec2 stepSize = 1.0/vec2(float(texSize.x), float(texSize.y));
+vec2 offsets[9] = vec2[](
+        vec2(-stepSize.x,  stepSize.y), // top-left
+        vec2( 0.0f,    stepSize.y), // top-center
+        vec2( stepSize.x,  stepSize.y), // top-right
+        vec2(-stepSize.x,  0.0f),   // center-left
+        vec2( 0.0f,    0.0f),   // center-center
+        vec2( stepSize.x,  0.0f),   // center-right
+        vec2(-stepSize.x, -stepSize.y), // bottom-left
+        vec2( 0.0f,   -stepSize.y), // bottom-center
+        vec2( stepSize.x, -stepSize.y)  // bottom-right    
+    );
+float sampleTex[9];
+    for(int i = 0; i < 9; i++)
+        sampleTex[i] = texture(colorDepthTexture, TexCoords.st + offsets[i]).a;
+if(abs(sampleTex[4]) < zeroTol)
+{
   FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+}
+else
+{
+float kernel1[9] = float[](
+        0, 1, 1,
+        0, 1, 1,
+        0, 1, 1
+    );
+  float sum1 = 0;
+for(int i = 0; i < 9; i++)
+        sum1 += step(sampleTex[i], sampleTex[4]) * kernel1[i];
+float kernel2[9] = float[](
+        1, 1, 1,
+        1, 1, 1,
+        0, 0, 0
+    );
+  float sum2 = 0;
+for(int i = 0; i < 9; i++)
+        sum2 += step(sampleTex[i], sampleTex[4]) * kernel2[i];
+float kernel3[9] = float[](
+        1, 1, 0,
+        1, 1, 0,
+        1, 1, 0
+    );
+  float sum3 = 0;
+for(int i = 0; i < 9; i++)
+        sum3 += step(sampleTex[i], sampleTex[4]) * kernel3[i];
+float kernel4[9] = float[](
+        0, 0, 0,
+        1, 1, 1,
+        1, 1, 1
+    );
+  float sum4 = 0;
+for(int i = 0; i < 9; i++)
+        sum4 += step(sampleTex[i], sampleTex[4]) * kernel4[i];
+float kernel5[9] = float[](
+        1, 1, 1,
+        0, 1, 1,
+        0, 0, 1
+    );
+  float sum5 = 0;
+for(int i = 0; i < 9; i++)
+        sum5 += step(sampleTex[i], sampleTex[4]) * kernel5[i];
+float kernel6[9] = float[](
+        1, 1, 1,
+        1, 1, 0,
+        1, 0, 0
+    );
+  float sum6 = 0;
+for(int i = 0; i < 9; i++)
+        sum6 += step(sampleTex[i], sampleTex[4]) * kernel6[i];
+float kernel7[9] = float[](
+        1, 0, 0,
+        1, 1, 0,
+        1, 1, 1
+    );
+  float sum7 = 0;
+for(int i = 0; i < 9; i++)
+        sum7 += step(sampleTex[i], sampleTex[4]) * kernel7[i];
+float kernel8[9] = float[](
+        0, 0, 1,
+        0, 1, 1,
+        1, 1, 1
+    );
+  float sum8 = 0;
+for(int i = 0; i < 9; i++)
+        sum8 += step(sampleTex[i], sampleTex[4]) * kernel8[i];
+  float testProd = sum1*sum2*sum3*sum4*sum5*sum6*sum7*sum8;
+  if(abs(testProd) < zeroTol) 
+{
+FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+}
+else
+{
+  float smallestDepth = 100000.0;
+  int smallestInd = 4;
+  for(int i = 0; i < 9; i++)
+  {
+     float depthDiff = (sampleTex[4] - sampleTex[i]);
+     if(depthDiff > zeroTol && depthDiff < smallestDepth)
+     {
+       smallestDepth = depthDiff;
+       smallestInd = i;
+     }
+  }
+  FragColor = texture(colorDepthTexture, TexCoords.st + offsets[smallestInd]).rgba;
+}
+}
 } 
 )foo";
       occlusionFragShader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -686,6 +810,64 @@ void main()
       glAttachShader(occlusionProgram, occlusionFragShader);
       glLinkProgram(occlusionProgram);
       glUseProgram(occlusionProgram);
+    }
+
+    /* Smoothing Vertex Shader */
+    {
+      const GLchar* smoothVertText = R"foo(
+#version 330 core
+
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+
+out vec2 TexCoords;
+
+void main()
+{
+  TexCoords = aTexCoords;
+  gl_Position = vec4(aPos.x, aPos.y, 0.0, 1.0); 
+}
+)foo";
+      smoothVertShader = glCreateShader(GL_VERTEX_SHADER);
+      glShaderSource(smoothVertShader, 1, &smoothVertText, 0);
+      glCompileShader(smoothVertShader);
+      if (!checkShaderCompile(smoothVertShader))
+      {
+        return;
+      }
+    }
+
+    /* Smoothing Fragment Shader */
+    {
+      const char* smoothFragText = R"foo(
+#version 330 core
+
+out vec4 FragColor;
+in vec2 TexCoords;
+
+uniform sampler2D colorDepthTexture;
+
+void main()
+{
+  FragColor = texture(colorDepthTexture, TexCoords.st).rgba;
+} 
+)foo";
+      smoothFragShader = glCreateShader(GL_FRAGMENT_SHADER);
+      glShaderSource(smoothFragShader, 1, &smoothFragText, 0);
+      glCompileShader(smoothFragShader);
+      if (!checkShaderCompile(smoothFragShader))
+      {
+        return;
+      }
+    }
+
+    /* Smoothing Program */
+    {
+      smoothProgram = glCreateProgram();
+      glAttachShader(smoothProgram, smoothVertShader);
+      glAttachShader(smoothProgram, smoothFragShader);
+      glLinkProgram(smoothProgram);
+      glUseProgram(smoothProgram);
     }
   }
   GLFWwindow* setupWindow()
@@ -710,7 +892,7 @@ void main()
   {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glUseProgram(occlusionProgram);
+    glUseProgram(smoothProgram);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, colorDepthTexture);
     glBindVertexArray(fboVAO);
@@ -738,9 +920,9 @@ void main()
   GLuint occlusionVertShader;
   GLuint occlusionFragShader;
   GLuint occlusionProgram;
-  //GLuint occlusionVertShader;
- // GLuint occlusionFragShader;
- // GLuint occlusionProgram;
+  GLuint smoothVertShader;
+  GLuint smoothFragShader;
+  GLuint smoothProgram;
   GLint pointModelLoc;
   GLint pointViewLoc;
   GLint pointProjectionLoc;
