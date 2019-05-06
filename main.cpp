@@ -301,6 +301,7 @@ private:
   void illustrateEffect()
   {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClearColor(1.f, 1.f, 1.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(illustrateProgram);
     glActiveTexture(GL_TEXTURE0);
@@ -486,8 +487,8 @@ uniform vec3 viewPos;
 
 void main()
 {
-    vec3 lightColor = vec3(.1,.1,.1);
-    vec3 objectColor = vec3(.9,.9,.9);
+    vec3 lightColor = vec3(1.0,1.0,1.0);
+    vec3 objectColor = vec3(.6,.6,.9);
     // ambient
     float ambientStrength = 0.1;
     vec3 ambient = ambientStrength * lightColor;
@@ -1142,7 +1143,7 @@ void main()
 
     /* Illustration Effect Fragment Shader */
     {
-      const char* illustrateFragText = R"foo(
+      const char* illustrateHighText = R"foo(
 #version 420
 
 out vec4 FragColor;
@@ -1154,11 +1155,44 @@ layout(binding=2) uniform sampler2D colorTextureIn;
 
 void main()
 {
+float fragPosDepth = texture(positionTextureIn, TexCoords.st).a;
+if(fragPosDepth < 1e-5) discard;
+ivec2 texSize = textureSize(positionTextureIn, 0);
+vec2 stepSize = 1.0/vec2(float(texSize.x), float(texSize.y));
+vec2 offsets[9] = vec2[](
+        vec2(-stepSize.x,  stepSize.y), // top-left
+        vec2( 0.0f,    stepSize.y), // top-center
+        vec2( stepSize.x,  stepSize.y), // top-right
+        vec2(-stepSize.x,  0.0f),   // center-left
+        vec2( 0.0f,    0.0f),   // center-center
+        vec2( stepSize.x,  0.0f),   // center-right
+        vec2(-stepSize.x, -stepSize.y), // bottom-left
+        vec2( 0.0f,   -stepSize.y), // bottom-center
+        vec2( stepSize.x, -stepSize.y)  // bottom-right    
+    );
+float featureFilter[9] = float[](
+        1.0/8.0,1.0/8.0, 1.0/8.0,
+        1.0/8.0, 0.0, 1.0/8.0,
+        1.0/8.0, 1.0/8.0, 1.0/8.0
+    );
+vec3 centerNormal = texture(normalTextureIn, TexCoords.st).xyz;
+float curvature = 0.0;
+for(int i = 0; i < 9; i++)
+{
+  curvature += featureFilter[i] * dot(texture(normalTextureIn, TexCoords.st + offsets[i]).xyz, centerNormal);
+}
+if(curvature > .975) 
+{
   FragColor = texture(colorTextureIn, TexCoords.st);
-} 
+}
+else
+{
+  FragColor = vec4(0.0,0.0,0.0,1.0);
+}
+}
 )foo";
       illustrateFragShader = glCreateShader(GL_FRAGMENT_SHADER);
-      glShaderSource(illustrateFragShader, 1, &illustrateFragText, 0);
+      glShaderSource(illustrateFragShader, 1, &illustrateHighText, 0);
       glCompileShader(illustrateFragShader);
       if (!checkShaderCompile(illustrateFragShader, "ILLUSTRATION FRAGMENT"))
       {
